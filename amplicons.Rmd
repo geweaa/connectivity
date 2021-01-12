@@ -1,0 +1,569 @@
+---
+title: "connectivity"
+author: "george.westmeijer@lnu.se"
+date: "10/13/2020"
+output: html
+---
+
+```{r libraries}
+suppressPackageStartupMessages(library(tidyverse))
+```
+
+## Read files
+The sequence table ("seqtab.tsv") is stored in long format. Samples with less than 1000 reads have been removed. The sample metadata ('smd.tsv') contains the origin of the sample (environment) and allows grouping by replicates. 
+
+```{r read data, message=FALSE, warning=FALSE}
+seqtab <- read_tsv('seqtab.tsv', col_types = cols(.default = col_character(), count = col_integer()))
+smd    <- read_tsv('smd.tsv', col_types = cols(.default = col_character())) 
+taxa   <- read_tsv("taxa.tsv", col_types = cols(.default = col_character()))
+```
+
+Calculate the relative abundance of each ASV within an environment
+
+```{r relative abundance within category}
+seqtab %>%
+  left_join(smd, by = "sample") %>%
+  group_by(origin) %>%
+  # Calculcate the relative abundance within a sample
+  mutate(relab = count/sum(count)) %>% ungroup() %>%
+  # A sequence may occur twice within a category 
+  group_by(origin, sequence) %>% 
+  summarise(relab = sum(relab)) %>% ungroup() -> reference
+```
+
+## Alpha diversity using Shannon-Weaver index
+
+Calculate Shannon-Weaver for each sample and combine with sample metadata
+
+```{r alpha diversity}
+suppressPackageStartupMessages(library(vegan))
+
+# Estimate alpha diversity with Shannon-Weaver
+seqtab %>%
+  spread(sequence, count, fill = 0) %>%
+  plyr::ddply(~sample, function(x) {diversity(x[-1])}) %>%
+  rename(shannon = V1) %>%
+  left_join(smd, by = "sample") %>%
+  group_by(replicate) %>%
+  mutate(meandiv = mean(shannon)) %>% ungroup() -> adiv
+```
+
+Plot the alpha diversity
+
+```{r plot alpha diversity, echo = FALSE}
+adiv %>%
+  ggplot(aes(
+    x = shannon, 
+    y = fct_relevel(origin, c("Old saline","Modern marine","Meteoric","Deep soil","Soil","Deep sediment","Shallow sediment","Benthic","Baltic")))) + 
+  geom_boxplot() +
+  coord_fixed(1.2) +
+  labs(x = "Alpha diversity (Shannon index)", y = "") +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+```
+
+Export plot as PDF
+```{r export plot}
+ggsave("figures/adiv.pdf", width = 4, height = 5, units = "in")
+```
+
+Statistical testing on alpha diversity, start with testing for the assumptions. Use the mean over the replicates (meandiv) for statistical testing.
+
+```{r anova on alpha diversity}
+suppressPackageStartupMessages(library(car))
+
+# Normality of the data (null hypothesis data is normally distributed)
+shapiro.test(adiv$meandiv)
+
+# QQ-plot
+qqPlot(adiv$meandiv)
+
+# Transformation
+adiv %>% mutate(shannon_log = log(shannon)) -> adiv
+
+# Non-parametric testing (null hypothesis diversity is equal)
+kruskal.test(meandiv ~ origin, data = adiv)
+
+# Homogeneity of variance using Levene (null hypothesis variance is equal)
+leveneTest(meandiv ~ origin, data = adiv)
+
+# Run ANOVA (null hypothesis diversity is equal)
+aov(meandiv ~ origin, data = adiv) %>% summary()
+
+# Post-hoc using Tukey (null hypothesis diversity is equal)
+aov(meandiv ~ origin, data = adiv) %>% TukeyHSD()
+```
+
+## Plot sequence length distribution among the different environments
+```{r sequence length distribution, echo = FALSE}
+seqtab %>%
+  left_join(smd, by = "sample") %>%
+  ggplot(aes(x = fct_relevel(origin, c("Baltic","Benthic","Shallow sediment","Deep sediment","Soil")), 
+             y = nchar(sequence))) +
+  geom_boxplot() +
+  xlab("") + 
+  ylab("") + 
+  ggtitle("Sequence length distribution DADA2 output") +
+  theme_bw() +
+  theme(axis.text.x.bottom = element_text(angle = 90)) +
+  theme(text = element_text(size = 12, face = "bold"))
+```
+
+## Ordination using NMDS, filtering ASVs with a total count less than 2
+Run the NMDS with 50 repetitions
+
+```{r nmds, results='hide'}
+seqtab %>%
+  group_by(sequence) %>% filter(count > 2) %>% ungroup %>%
+  spread(sequence, count, fill = 0) %>%
+  column_to_rownames("sample") %>%
+  vegan::metaMDS(trymax = 50) -> nmds
+```
+
+Extract the scores
+
+```{r nmds}
+vegan::scores(nmds) %>%
+  as.data.frame() %>%
+  rownames_to_column("sample") %>%
+  left_join(smd, by = "sample") -> nmds.scores
+```
+
+Plot the ordination
+
+```{r nmds plot, include = T}
+# Load package for colorRampPalette()
+suppressPackageStartupMessages(library(RColorBrewer))
+
+nmds.scores %>%
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  geom_point(aes(
+    colour = fct_relevel(origin, c("Baltic","Benthic","Shallow sediment","Deep sediment","Soil","Deep soil"))),
+    size = 4.0, alpha = 0.7) +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Accent"))(9)) +
+  labs(x = "", y = "") +
+  theme_bw() + 
+  theme(legend.title = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "bottom",
+        aspect.ratio = 0.8)
+```
+
+Export plot as a PDF
+
+```{r export plot}
+ggsave("figures/nmds.pdf", width = 18, height = 13.5, units = "cm")
+```
+
+Statistical testing on beta diversity
+
+```{r statistical testing beta diversity}
+seqtab %>%
+  group_by(sequence) %>%
+  filter(count > 2) %>% ungroup() %>%
+  left_join(smd) %>%
+  filter(origin %in% c("Modern marine","Meteoric")) %>%
+  # Prepare a numeric dataframe for Vegan
+  spread(sequence, count, fill = 0) -> df
+
+vegan::adonis2(df[,-1:-2] ~ origin, data = df[,1:2], sqrt.dist = F)
+```
+
+Test the homogeneity of group variation
+```{Homogeneity of within-group variation}
+df %>%
+  select(-sample, -origin) %>%
+  vegan::vegdist() %>%
+  vegan::betadisper(sqrt.dist = T, group = df$origin) %>%
+  anova()
+```
+
+## Stack bars
+
+```{r select most abundant asvs, message=FALSE, warning=FALSE}
+# Select the 11 most abundant phyla over all categories
+reference %>%
+  inner_join(taxa, by = "sequence") %>%
+  group_by(Order, origin) %>%
+  # Sum the abundance of each phylum within a category
+  summarise(relab = sum(relab)) %>%
+  # Calculate the mean abundance of each phylum over the categories
+  summarise(mean_relab = sum(relab)) %>%
+  ungroup() %>%
+  filter(!is.na(Order)) %>%
+  top_n(11, mean_relab) -> t
+
+# Add column to taxonomy whether or not phylum is part of selection
+taxa %>%
+  left_join(t %>% transmute(Order, topphylum = Order), by = "Order") %>%
+  replace_na(list("topphylum" = "Other")) -> taxref
+```
+
+```{r plot stack bar}
+# Load required library
+suppressPackageStartupMessages(library(RColorBrewer))
+
+# Plot
+reference %>%
+  inner_join(taxref, by = "sequence") %>%
+  group_by(topphylum, origin) %>% summarise(relab = sum(relab)) %>% ungroup() %>%
+  # Some categories do not exactly sum up to 1 so adjust:
+  group_by(origin) %>% mutate(relab = relab/sum(relab)) %>% ungroup() %>%
+  ggplot(aes(
+    x = fct_relevel(origin, (c("Old saline","Modern marine","Meteoric","Deep soil","Soil","Deep sediment","Shallow sediment","Benthic","Baltic"))), 
+    y = relab, 
+    fill = fct_relevel(topphylum, c("Other")))) +
+  ylab("Relative abundance") + xlab(element_blank()) +
+  geom_col(width = 0.9) +
+  scale_fill_manual(values = colorRampPalette(brewer.pal(9, "Paired"))(12)) +
+  coord_flip() +
+  theme(legend.position = 'bottom', 
+        panel.background = element_blank(),
+        legend.title = element_blank(),
+        axis.ticks.y = element_blank())
+```
+
+Finally, save the stack bar as a PDF
+
+```{r export bar plot}
+ggsave("figures/barplot_order.pdf", height = 12, width = 24, units = "cm")
+```
+
+Add genome size to the heat map
+
+```{r barplot genome size}
+genome <- read_tsv("metabolisms.txt", col_types = cols(
+  .default = col_integer(),
+  label = col_character(),
+  size = col_double(),
+  estimate = col_double()))
+
+# Plot genome size
+genome %>%
+  # Express genome size in Mbp
+  mutate(size = size / 1e6, estimate = estimate / 1e6) %>%
+  select(label, position, size, estimate) %>%
+  gather(genome, fraction, 3:4) %>%
+  # Align according to position in the heat map
+  ggplot(aes(
+    x = fct_reorder(label, position, .desc = T), 
+    y = fraction,
+    fill = genome)) +
+  scale_fill_manual(values = c("size" = "#000000", "estimate" = "#bdbdbd")) +
+  ylab("Genome size") + xlab(element_blank()) + ylim(0, 6) +
+  geom_col() +
+  coord_flip() +
+  theme(panel.background = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        aspect.ratio = 8, 
+        legend.position = "none")
+```
+```{r export heat map}
+ggsave("figures/genomes.pdf", width = 6, height = 10, units = "in")
+```
+
+Plot heat map of the pathways
+
+```{r heat map pathways, message=FALSE, warning=FALSE}
+genome %>%
+  select(-estimation) %>%
+  gather(pathway, presence, 3:8) %>%
+  ggplot(aes(
+    x = pathway, 
+    y = fct_reorder(label, position, .desc = T))) +
+  geom_tile(aes(fill = presence), colour = "white") +
+  scale_fill_gradient2(low = "white", 
+                       high = "black", na.value = "white") +
+  theme_grey(base_size = 9) +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0), position = "top") +
+  scale_y_discrete(expand = c(0,0)) + 
+  theme(axis.text.x.top = element_text(angle = 45, hjust = 0.1, vjust = 0.1),
+        text = element_text(size = 10), 
+        axis.ticks = element_blank(), 
+        panel.grid = element_blank(),
+        aspect.ratio = 6,
+        legend.position = "none")
+```
+```{r export heat map}
+ggsave("figures/heatmap_pathways.pdf", width = 6, height = 10, units = "in")
+```
+
+
+## Core / unique community
+
+The core community is defined as the ASVs that are present in each of the three groundwater types. The unique commnunity (accesory community in manuscript) are the taxa that occur in a groundwater type but are not present in the other two. By filtering "n == 3", sequences are selected that are present in all three groundwaters; by filtering "n == 1", only the ASVs are selected that are not present in multiple groundwaters.
+
+```{r core asvs}
+reference %>%
+  filter(origin %in% c("Meteoric","Modern marine","Old saline")) %>%
+  distinct() %>%
+  group_by(sequence) %>%
+  tally() %>%
+  # Require to be present in all groundwater types by stating n == 3
+  filter(n == 1) %>%
+  # Join with sequence table to obtain the abundance in the different samples of the core ASVs
+  inner_join(reference, by = "sequence") %>%
+  # Finally, we are only interested in the abudance of the core community in the Äspö groundwaters
+  filter(origin %in% c("Meteoric","Modern marine","Old saline")) -> acc
+```
+
+Now we know which sequences occupy the core community and their abundance in the groundwaters. Next to do is to select the 11 most abundant phyla (or classes / orders) and group the rest as "Others" so the plot is easy to read.
+
+```{r top phyla in core, message=FALSE, warning=FALSE}
+core %>%
+  inner_join(taxa, by = "sequence") %>%
+  # Group according to desired taxonomic level
+  group_by(Order, origin) %>%
+  # Sum the abundance of each phylum within a category
+  summarise(relab = sum(relab)) %>%
+  # Calculate the mean abundance of each phylum over the categories
+  summarise(mean_relab = sum(relab)) %>%
+  ungroup() %>%
+  filter(!is.na(Order)) %>%
+  top_n(11, mean_relab) -> t
+
+taxa %>%
+  left_join(t %>% transmute(Order, topphylum = Order), by = "Order") %>%
+  replace_na(list("topphylum" = "Other")) -> taxref
+```
+
+Plot the community with the 11 most abundant phyla and the rest grouped as "Other"
+
+```{r plot core community}
+# Load required library
+suppressPackageStartupMessages(library(RColorBrewer))
+
+core %>%
+  inner_join(taxref, by = "sequence") %>%
+  group_by(topphylum, origin) %>% 
+  summarise(relab = sum(relab)) %>%
+  ungroup() %>%
+  # Standardize all relative abundance to 1
+  group_by(origin) %>% mutate(relab = relab/sum(relab)) %>% ungroup() %>%
+  ggplot(aes(
+    x = fct_relevel(origin, c("Old saline","Modern marine","Meteoric")), 
+    y = relab, 
+    fill = fct_relevel(topphylum, c("Other")))) +
+  ylab("Relative abundance") + xlab(element_blank()) +
+  geom_col(width = 0.9) +
+  scale_fill_manual(values = colorRampPalette(brewer.pal(9, "Paired"))(12)) +
+  coord_flip() +
+  theme(legend.position = 'bottom', 
+        panel.background = element_blank(),
+        axis.ticks.y = element_blank(),
+        aspect.ratio = 1/5, 
+        legend.title = element_blank()) 
+```
+
+Export the plot
+```{r}
+ggsave("figures/core_order.pdf", width = 24, height = 8, units = "cm")
+```
+
+
+## Overlapping taxa
+
+The question here is which ASVs occur in multiple environments, also including surface environments. A small matrix is prepared containing all possible pairwise combinations between the different environments and this is piped to intersect().
+
+```{r number of overlapping ASVs}
+smd %>% 
+  pull(origin) %>% 
+  unique %>%
+  expand_grid(left = ., right = .) %>%
+  mutate(overlap = 
+           apply(., 1, function(x) intersect(
+    reference[reference$origin == x[1], "sequence"], 
+    reference[reference$origin == x[2], "sequence"]) %>% 
+    nrow())
+  )
+```
+
+Using a similar approach, calculate the abundance of these overlapping ASVs
+
+```{r count overlapping taxa}
+smd %>% 
+  pull(origin) %>% 
+  unique %>%
+  expand_grid(left = ., right = .) %>%
+  mutate(abundance = 
+           apply(., 1, function(x) intersect(
+    reference[reference$origin == x[1], "sequence"], 
+    reference[reference$origin == x[2], "sequence"]) %>% 
+      left_join(reference, by = "sequence") %>%
+      filter(origin == x[1]) %>%
+      pull(relab) %>% 
+      sum() %>% 
+      round(digits = 2))
+  )
+```
+
+## Phylogenetics and heat map
+
+The heat map is composed by the abundance of the most abundant taxa in the three groundwaters.
+
+```{r most abundant taxa in groundwaters}
+reference %>%
+  filter(origin %in% c("Meteoric","Modern marine","Old saline")) %>%
+  group_by(origin) %>%
+  # Select the most abundant taxa
+  top_n(15, relab) %>% ungroup() %>%
+  select(sequence) %>% distinct() %>%
+  # Map back to the reference to obtain abundance in other environments as well
+  left_join(reference, by = "sequence") %>%
+  # Assign absence when the sequence is not present in the environment
+  spread(origin, relab, fill = 0) %>%
+  gather(origin, relab, -1) -> t
+
+# Add the taxonomic label
+taxa %>% 
+  mutate(label = coalesce(Genus, Family, Order, Class, Phylum, Kingdom)) %>%
+  filter(sequence %in% t$sequence) %>%
+  mutate(label = if_else(label == "Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium", "A-N-P-R*", label)) %>%
+  mutate(label = sub("_", " ", label)) %>%
+  mutate(label = paste("ASV", row_number(), label, sep = " ")) %>%
+  select(sequence, label) %>%
+  right_join(t, by = "sequence") -> t
+```
+
+Create a phylogeny to add later to the heat map
+
+```{r multiple sequence alignment, message=FALSE, warning=FALSE, results='hide'}
+# Load required packages
+suppressPackageStartupMessages(library(phangorn))
+
+# Run a multiple sequence alignment
+t %>% distinct(sequence) %>% pull() -> seqs
+names(seqs) <- seqs
+seqs %>%
+  Biostrings::DNAStringSet() %>%
+  DECIPHER::AlignSeqs() %>%
+  as.matrix() %>%
+  phyDat() -> align
+
+# Using the alignment, perform neighbour-joining NJ() and pml()
+align %>%
+  dist.ml() %>%
+  NJ() %>%
+  pml(data = align) %>%
+  update(k = 4, inv = 0.2) %>%
+  optim.pml(model = "GTR", 
+            optInv = T, optGamma = T, 
+            rearrangement = "stochastic", 
+            control = phangorn::pml.control(trace = 0)) -> phy.model
+
+# Root the tree using midpoint()
+phy.model$tree %>% midpoint() -> phy.model$tree
+```
+
+The taxa in the heat map should be aligned according to their position in the phylogeny. To do so, the data from the tree needs to be extracted.
+
+```{r extract the data from the phylogeny}
+phy.model$tree %>%
+  ggtree::fortify() %>%
+  rename(sequence = label) %>%
+  filter(sequence != "NA") %>%
+  right_join(t[,c("sequence", "label")]) %>%
+  distinct() %>%
+  arrange(y) -> mpdis
+```
+
+Finally, plot the heat map
+
+```{r plot heat map}
+t %>%
+  ggplot(aes(
+    x = fct_relevel(origin, c("Baltic","Benthic","Shallow sediment","Deep sediment","Soil")), 
+    y = fct_relevel(label, mpdis$label))) +
+  geom_tile(aes(fill = sqrt(relab)), colour = "white") +
+  scale_fill_gradient2(low = "white", 
+                       mid =  "steelblue",
+                       high = "steelblue4", midpoint = .25, na.value = "white") +
+  theme_grey(base_size = 9) +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0), position = "top") +
+  scale_y_discrete(expand = c(0,0)) + 
+  guides(fill = guide_legend(title="Mean abundance")) +
+  theme(axis.text.x.top = element_text(angle = 45, hjust = 0.1, vjust = 0.1),
+        text = element_text(size = 10), 
+        axis.ticks = element_blank(), 
+        panel.grid = element_blank(),
+        aspect.ratio = 0.8)
+```
+
+Optionally export the plot
+
+```{r export heat map}
+ggsave("figures/heatmap.pdf", width = 6, height = 10, units = "in")
+```
+
+## Heat map core / accessory community
+
+Small addition on plotting the heat map for the accessory community
+
+```{r heat map core, message=FALSE, warning=FALSE}
+seqtab %>%
+  left_join(smd, by = "sample") %>%
+  group_by(origin) %>%
+  # Calculcate the relative abundance within a sample
+  mutate(relab = count/sum(count)) %>% ungroup() %>%
+  # A sequence may occur twice within a category 
+  group_by(origin, sequence) %>% 
+  summarise(relab = sum(relab)) %>% ungroup() -> reference
+
+reference %>%
+  filter(origin %in% c("Meteoric","Modern marine","Old saline")) %>%
+  distinct() %>%
+  group_by(sequence) %>%
+  tally() %>%
+  # Require to be present in all groundwater types by stating n == 3
+  filter(n == 1) %>%
+  left_join(reference, by = "sequence") %>%
+  # Select 30 most abundant ASVs
+  group_by(origin,sequence) %>% summarise(relab = sum(relab)) %>%
+  # For the accessory community, the 10 most abundant ASVs are selected from each groundwater type
+  top_n(10, relab) %>% ungroup() %>% filter(origin %in% c("Meteoric","Modern marine","Old saline")) %>% select(sequence) -> t
+
+# Map "t" back to the reference
+t %>%
+  left_join(reference, by = "sequence") %>%
+  # Assign absence when the sequence is not present in the environment
+  spread(origin, relab, fill = 0) %>%
+  gather(origin, relab, -1) -> t
+
+# Add the taxonomic label
+taxa %>% 
+  mutate(label = coalesce(Genus, Family, Order, Class, Phylum, Kingdom)) %>%
+  filter(sequence %in% t$sequence) %>%
+  mutate(label = if_else(label == "Allorhizobium-Neorhizobium-Pararhizobium-Rhizobium", "A-N-P-R*", label)) %>%
+  mutate(label = sub("_", " ", label)) %>%
+  mutate(label = paste("ASV", row_number(), label, sep = " ")) %>%
+  select(sequence, label) %>%
+  right_join(t, by = "sequence") -> t
+
+# Plot
+t %>%
+  ggplot(aes(
+    x = fct_relevel(origin, c("Baltic","Benthic","Shallow sediment","Deep sediment","Soil")), 
+    y = label)) +
+  geom_tile(aes(fill = sqrt(relab)), colour = "white") +
+  scale_fill_gradient2(low = "white", 
+                       mid =  "steelblue",
+                       high = "steelblue4", midpoint = .25, na.value = "white") +
+  theme_grey(base_size = 9) +
+  labs(x = "", y = "") +
+  scale_x_discrete(expand = c(0,0), position = "top") +
+  scale_y_discrete(expand = c(0,0)) + 
+  theme(axis.text.x.top = element_text(angle = 45, hjust = 0.1, vjust = 0.1),
+        text = element_text(size = 10),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        aspect.ratio = 4.0)
+```
+
+Save as PDF
+
+```{r heat map core export, message=FALSE, warning=FALSE}
+# Export PDF
+ggsave("figures/heatmap_accessory.pdf", width = 6, height = 8, units = "in")
+```
