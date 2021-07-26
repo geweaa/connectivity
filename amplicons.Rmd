@@ -8,7 +8,7 @@ output:
 ---
 
 ```{r libraries, message=FALSE, warning=FALSE}
-suppressPackageStartupMessages(library(tidyverse))
+library(tidyverse)
 ```
 
 ## Read files
