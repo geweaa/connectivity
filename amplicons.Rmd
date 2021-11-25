@@ -5,7 +5,12 @@ date: "25/11/2021"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+```
+
 
 ```{r libraries, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -327,7 +332,7 @@ chemistry %>%
 
 Statistical testing on alpha diversity, start with testing for the assumptions. Use the mean over the replicates (meandiv) for statistical testing.
 
-```{r anova on alpha diversity}
+```{r anova on alpha diversity, results='hide'}
 suppressPackageStartupMessages(library(car))
 # Normality of the data (null hypothesis data is normally distributed)
 shapiro.test(adiv$shannon)
@@ -341,24 +346,8 @@ aov(meandiv ~ env, data = adiv) %>% summary()
 aov(meandiv ~ env, data = adiv) %>% TukeyHSD(which = "env")
 ```
 
-```{r quantile-quantile plot}
+```{r quantile-quantile plot, include=FALSE}
 qqPlot(adiv$shannon, ylab = "Alpha diversity (Shannon index)")
-```
-
-
-## Plot sequence length distribution among the different environments
-
-```{r sequence length distribution, echo = FALSE}
-seqs <- read_tsv('sequences.tsv', col_types = cols(.default = col_character()))
-
-seqtab %>%
-  inner_join(smd, by = "sample") %>%
-  inner_join(seqs, by = 'seqid') %>%
-  ggplot(aes(x = env, y = nchar(sequence))) +
-  geom_boxplot() +
-  labs(x = '', y = 'ASV length (nt)') +
-  theme_bw() +
-  theme(axis.text.x.bottom = element_text(angle = 90, hjust = 1.0))
 ```
 
 ## Ordination using NMDS, filtering out ASVs with a count less than 2
@@ -403,7 +392,7 @@ nmds.scores %>%
 ggsave("figures/fig_4.pdf", width = 12, height = 12, units = "cm")
 ```
 
-```{r nmds deep biosphere groundwaters}
+```{r nmds deep biosphere groundwaters, results='hide'}
 seqtab %>%
   filter(count > 4 & sample %in% smd[smd$surface == 'no', ]$sample) %>%
   select(seqid, sample, count) %>% spread(seqid, count, fill = 0) %>%
@@ -435,7 +424,7 @@ ggsave("figures/fig_s4.pdf", width = 12, height = 12, units = "cm")
 
 Statistical testing on beta diversity
 
-```{r statistical testing beta diversity}
+```{r statistical testing beta diversity, results='hide'}
 seqtab %>%
   select(-relab) %>%
   inner_join(smd[, c("sample", "env", "replicate")], by = "sample") %>%
@@ -661,7 +650,7 @@ seqtab %>%
 ```
 
 
-```{r count overlapping taxa}
+```{r count overlapping taxa, results='hide'}
 expand_grid(x = unique(smd$env), y = unique(smd$env)) %>%
   mutate(overlap = 
            apply(., 1, function(x) intersect(
@@ -727,53 +716,4 @@ cowplot::plot_grid(a + theme(legend.position = 'none'), b + theme(legend.positio
                    labels = c('a)','b)'),
                    label_fontface = "plain")
 ggsave("figures/fig_5bc.pdf", height = 12, width = 16, units = "cm")
-```
-
-
-## Pheatmap
-
-```{r pheatmap}
-seqtab %>%
-  filter(seqid %in% overlap & sample %in% smd[smd$surface == 'no',]$sample) %>%
-  inner_join(smd, by = 'sample') %>%
-  inner_join(tax, by = "seqid") %>%
-  group_by(seqid, env) %>%
-  # Sum the abundance of each phylum within a sample
-  summarise(relab = sum(relab), .groups = 'drop_last') %>%
-  # Calculate the mean abundance of each phylum over the categories
-  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
-  top_n(30, mean_relab) %>%
-  inner_join(tax, by = 'seqid')-> t
-
-t %>%
-  # Mutate taxonomies that only say 'uncultured'
-  mutate(across(c(class, order, family, genus, species), ~gsub('uncultured', NA, .))) %>%
-  # Create a label based on the highest taxonomic level
-  mutate(label = coalesce(genus, family, order, class, phylum, domain)) %>%
-  # Add a unique ASV labl
-  mutate(label = paste("ASV", sprintf('%02d', row_number()), label)) %>%
-  select(label, seqid) %>%
-  # Join with seqtab to obtain abundance per sample
-  inner_join(seqtab, by = 'seqid') %>%
-  # Join with metadata to add categories
-  inner_join(smd, by = 'sample') %>%
-  select(label, env, relab) %>%
-  # Sum abundance within each grouping
-  group_by(env, label) %>% summarise(relab = sum(relab), .groups = 'drop') %>%
-  # Transform abundance
-  mutate(relab = sqrt(relab)) %>%
-  spread(env, relab, fill = 0) %>% column_to_rownames('label') %>%
-  # Convert to a matrix
-  as.matrix() -> heatmap_matrix
-
-library(RColorBrewer)
-pheatmap::pheatmap(heatmap_matrix,
-                   filename = 'figures/pheatmap.pdf',
-                   color = colorRampPalette(brewer.pal(8, "Blues"))(7), 
-                   breaks = c(0, 0.001, 0.01, 0.02, 0.05, 0.1, 0.2, 0.35),
-                   legend_breaks = c(0, 0.1, 0.2, 0.30), legend_labels = c('0','0.1','0.2','0.3'),
-                   border_color = NA, fontsize = 9,
-                   cellwidth = 15, cellheight = 15, 
-                   scale = 'none', cluster_rows = T, cluster_cols = F, treeheight_row = 25,
-                   clustering_distance_rows = 'euclidean')
 ```
