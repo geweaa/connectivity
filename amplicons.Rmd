@@ -1,6 +1,6 @@
 ---
-title: "connectivity"
-author: "george.westmeijer@lnu.se"
+title: "Connectivity deep biosphere microbes"
+author: "George Westmeijer"
 date: "26/07/2021"
 output:
   html_document:
@@ -17,7 +17,16 @@ The sequence table ("seqtab.tsv") is stored in long format. Samples with less th
 ```{r read data, message=FALSE, warning=FALSE}
 smd <- read_tsv('smd.tsv', col_types = cols(.default = col_character())) %>%
   # Some samples have been filtered out above
-  mutate(env = factor(env, levels = c('Marine surface','Marine benthic','Shallow sediment','Deep sediment','Shallow soil','Deep soil','Meteoric','Modern marine','Old saline'))) %>%
+  mutate(env = factor(env, 
+                      levels = c('Baltic surface seawater',
+                                 'Baltic benthic seawater',
+                                 'Upper sediment',
+                                 'Lower sediment',
+                                 'Upper soil groundwater',
+                                 'Lower soil groundwater',
+                                 'Meteoric groundwater',
+                                 'Modern marine groundwater',
+                                 'Old saline groundwater'))) %>%
   group_by(env) %>% add_tally() %>% ungroup()
 
 tax <- read_tsv('taxonomy.tsv', col_types = cols(.default = col_character()))
@@ -31,22 +40,151 @@ seqtab <- read_tsv('seqtab.tsv', col_types = cols(.default = col_character(), co
   inner_join(smd, by = 'sample') %>%
   group_by(env) %>% mutate(relab = relab / sum(relab)) %>% ungroup() %>%
   select(seqid, sample, count, relab) -> seqtab
+
+chemistry <- read_tsv('chemistry.txt', col_types = cols(.default = col_double(), replicate = col_character())) %>%
+  mutate(Cl = Cl / 1000, EC = EC / 100) %>%
+  gather(parameter, value, -1) %>% 
+  na.omit()
 ```
 
-Calculate the relative abundance of each ASV within an environment
 
-```{r relative abundance within category}
-seqtab %>%
-  # Calculate the relab within environment
-  inner_join(smd, by = 'sample') %>% 
-  group_by(env, seqid) %>% summarise(relab = sum(relab), .groups = 'drop') -> reference
+Define themes to use throughout the manuscript
+
+
+```{r set theme}
+theme_tidy <- function() {
+  theme(
+    axis.title.x = element_text(colour = "black", size = 8),
+    axis.title.y = element_text(colour = "black", size = 8),
+    axis.text.x = element_text(colour = "black", size = 8),
+    axis.text.y = element_text(colour = "black", size = 8),
+    legend.text = element_text(colour = "black", size = 8),
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    strip.text = element_text(colour = "black", size = 8, hjust = 0.5),
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    aspect.ratio = 1.0,
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    panel.border = element_rect(colour = "black", size = 0.5, fill = NA),
+    legend.title = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  )
+}
+
+theme_barplot <- function() {
+  theme(
+    axis.title.x = element_text(colour = "black", size = 8),
+    axis.title.y = element_text(colour = "black", size = 8),
+    axis.text.x = element_text(colour = "black", size = 8),
+    axis.text.y = element_text(colour = "black", size = 8, margin = margin(0,-5,0,0, unit = 'mm')),
+    legend.text = element_text(colour = "black", size = 8),
+    strip.background = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    aspect.ratio = 0.7,
+    strip.text = element_text(colour = "black", size = 8, hjust = 0.5),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank(),
+    legend.spacing.x = unit(0.5, 'mm'),
+    panel.border = element_blank(),
+    legend.key.size = unit(4.5, "mm"),
+    legend.box.spacing = unit(1, 'mm'),
+    axis.ticks.y = element_blank()
+  )
+}
+```
+
+
+```{r barplot function}
+barplot <- function(asvs = seqtab, meta = smd, taxonomy = tax, taxlevel = "phylum", n = 11) {
+  if (taxlevel == "phylum") {  
+  asvs %>%
+  inner_join(meta, by = 'sample') %>%
+  inner_join(taxonomy, by = "seqid") %>%
+  group_by(phylum, env) %>%
+  # Sum the abundance of each phylum within a sample
+  summarise(relab = sum(relab), .groups = 'drop_last') %>%
+  # Calculate the mean abundance of each phylum over the categories
+  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
+  filter(!is.na(phylum) & phylum != "uncultured bacterium") %>%
+  top_n(11, mean_relab) -> t
+
+taxonomy %>%
+  left_join(t %>% transmute(phylum, topphylum = phylum), by = "phylum") %>%
+  replace_na(list("topphylum" = "Other")) -> taxref
+
+asvs %>%
+  inner_join(taxref, by = "seqid") %>% 
+  inner_join(meta, by = 'sample') %>%
+  # Summarize in order to have the sum for each category and topphylum
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') -> asvs.phylum
+  return(asvs.phylum)
+  }
+  else if (taxlevel == "class") {
+  asvs %>%
+  inner_join(meta, by = 'sample') %>%
+  inner_join(taxonomy, by = "seqid") %>%
+  group_by(class, env) %>%
+  # Sum the abundance of each phylum within a sample
+  summarise(relab = sum(relab), .groups = 'drop_last') %>%
+  # Calculate the mean abundance of each phylum over the categories
+  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
+  filter(!is.na(class) & class != "uncultured bacterium") %>%
+  top_n(11, mean_relab) -> t
+
+taxonomy %>%
+  left_join(t %>% transmute(class, topphylum = class), by = "class") %>%
+  replace_na(list("topphylum" = "Other")) -> taxref
+
+asvs %>%
+  inner_join(taxref, by = "seqid") %>% 
+  inner_join(meta, by = 'sample') %>%
+  # Summarize in order to have the sum for each category and topphylum
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') -> asvs.class
+  return(asvs.class)
+  }
+  else {
+  asvs %>%
+  inner_join(meta, by = 'sample') %>%
+  inner_join(taxonomy, by = "seqid") %>%
+  group_by(order, env) %>%
+  # Sum the abundance of each phylum within a sample
+  summarise(relab = sum(relab), .groups = 'drop_last') %>%
+  # Calculate the mean abundance of each phylum over the categories
+  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
+  filter(!is.na(order) & !grepl(pattern = "uncultured", x = order)) %>%
+  top_n(n, mean_relab) -> t
+
+taxonomy %>%
+  left_join(t %>% transmute(order, topphylum = order), by = "order") %>%
+  replace_na(list("topphylum" = "Other")) -> taxref
+
+asvs %>%
+  inner_join(taxref, by = "seqid") %>% 
+  inner_join(meta, by = 'sample') %>%
+  # Summarize in order to have the sum for each category and topphylum
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') -> asvs.order
+  return(asvs.order)
+  }
+}
 ```
 
 ## Alpha diversity using Shannon-Weaver index
 
+
 Calculate Shannon-Weaver for each sample and combine with sample metadata
 
-```{r alpha diversity}
+
+```{r estimate alpha diversity}
 seqtab %>%
   select(-relab) %>%
   spread(seqid, count, fill = 0) %>% column_to_rownames('sample') %>%
@@ -56,35 +194,136 @@ seqtab %>%
   inner_join(smd, by = "sample") %>%
   group_by(replicate) %>%
   mutate(meandiv = mean(shannon)) %>% ungroup() %>%
-  # Preparations for plot to add number of replicates
-  mutate(n = paste(' n =', n, env, sep = ' ')) %>%
   arrange(env) -> adiv
 ```
 
-Plot the alpha diversity
+
+Plot alpha diversity
+
 
 ```{r plot alpha diversity, echo = FALSE}
-d <- adiv %>% pull(n) %>% unique() %>% rev()
-
 adiv %>%
-  ggplot(aes(x = shannon, y = fct_relevel(n, d))) + 
+  ggplot(aes(x = shannon, y = fct_rev(env))) + 
   geom_boxplot() +
+  geom_jitter(width = 0.01, alpha = 0.4, height = 0.1) +
   labs(x = "Alpha diversity (Shannon index)", y = "") +
-  theme_bw() +
-  theme(panel.grid = element_blank(), 
-        text = element_text(size = 9),
-        aspect.ratio = 1.8,
-        axis.text.y = element_text(colour = 'black', size = 9),
-        axis.title.x = element_text(size = 9))
+  theme_tidy() + theme(aspect.ratio = 1.8)
 ```
 
-Export plot as PDF
-```{r export adiv}
-ggsave("figures/adiv.pdf", width = 10, height = 12, units = "cm")
 
-# Clean 
-remove(d)
+```{r export alpha diversity plot}
+ggsave("figures/fig_3a.pdf", width = 10, height = 10, units = "cm")
 ```
+
+
+```{r chemistry and alpha}
+chemistry %>%
+  filter(parameter %in% c('O18', 'ph', 'depth', 'Cl', 'DOC', 'FEII')) %>%
+  inner_join(smd, by = 'replicate') %>%
+  mutate(parameter = factor(parameter, levels = c("depth","DOC","O18","Cl","FEII","ph"))) %>%
+  group_by(env, parameter) %>% 
+  mutate(env = sub("groundwater", "\ngroundwater", env)) %>%
+  ggplot(aes(x = fct_rev(fct_relevel(env, c("Upper soil \ngroundwater"))), y = value)) +
+  geom_boxplot(na.rm = TRUE) +
+  geom_jitter(width = 0.01, alpha = 0.4, height = 0.1, na.rm = TRUE) +
+  coord_flip() +
+  facet_wrap(~parameter, scales = 'free_x', nrow = 1, strip.position = 'bottom', labeller = 
+               as_labeller(c(
+                 depth = "Depth~(m)", 
+                 DOC = "DOC~(mg~L^-1)", 
+                 Cl = 'Cl^{-phantom()}~(g~L^-1)',
+                 FEII = 'Fe^{2+phantom()} ~ (mg~L^-1)',
+                 O18 = 'delta^{18}*O~(ppt)', 
+                 ph = 'pH'), default = label_parsed)) +
+  theme_tidy() + theme(aspect.ratio = 3.0, 
+                       strip.placement = "outside", 
+                       axis.title.x = element_blank(), 
+                       axis.title.y = element_blank())
+```
+
+
+```{r export chemistry plot}
+ggsave("figures/fig_1.pdf", width = 20, height = 10, units = "cm")
+```
+
+
+```{r supplemental chemistry}
+chemistry %>%
+  filter(parameter %in% c('depth','Mn', 'Mg', 'SO4', 'Sr', 'EC')) %>%
+  inner_join(smd, by = 'replicate') %>%
+  mutate(parameter = factor(parameter, levels = c("depth","EC","Sr","Mn","Mg","SO4"))) %>%
+  group_by(env, parameter) %>%
+  mutate(env = sub("groundwater", "\ngroundwater", env)) %>%
+  ggplot(aes(x = fct_rev(fct_relevel(env, c("Upper soil \ngroundwater"))), y = value)) +
+  geom_boxplot(na.rm = TRUE) +
+  geom_jitter(width = 0.01, alpha = 0.4, height = 0.1, na.rm = TRUE) +
+  coord_flip() +
+  facet_wrap(~parameter, scales = 'free_x', nrow = 1, strip.position = 'bottom', labeller = 
+               as_labeller(c(
+                 depth = "Depth~(m)", 
+                 EC = "EC~(mS~cm^-1)", 
+                 Sr = 'Sr~(mg~L^-1)',
+                 Mn = 'Mn~(mg~L^-1)',
+                 Mg = 'Mg~(mg~L^-1)', 
+                 SO4 = 'SO[4]^{2-phantom()}~(mg~L^-1)'), default = label_parsed)) +
+ theme_tidy() + theme(aspect.ratio = 3.0, 
+                       strip.placement = "outside", 
+                       axis.title.x = element_blank(), 
+                       axis.title.y = element_blank())
+```
+
+
+```{r export supplemental chemistry}
+ggsave("figures/fig_s1.pdf", width = 20, height = 10, units = "cm")
+```
+
+
+```{r alpha diversity correlation}
+chemistry %>%
+  group_by(replicate, parameter) %>% summarise(value = mean(value), .groups = "drop") %>%
+  filter(parameter %in% c("depth","DOC")) %>%
+  inner_join(adiv, by = "replicate") %>%
+  ggplot(aes(x = value, y = meandiv)) +
+  geom_point(aes(color = env), size = 3, alpha = 0.7, na.rm = TRUE) +
+  geom_smooth(method = "lm", formula = y ~ x,color = "black", fill = "#d9d9d9", se = TRUE, size = 0.8) +
+  labs(x = "", y = 'Alpha diversity (Shannon index)') +
+  scale_color_manual(values = c("#fb9a99","#e31a1c","#fdbf6f","#b15928","#cab2d6")) +
+  facet_wrap(~parameter, scales = 'free_x', nrow = 1, strip.position = 'bottom', labeller = 
+               as_labeller(c(
+                 depth = "Depth~(m)", 
+                 DOC = "Dissolved~organic~carbon~(mg~L^-1)"), default = label_parsed)) +
+  theme_tidy() + guides(color = guide_legend(nrow = 2)) + theme(legend.box.spacing = unit(-3, 'mm'))
+```
+
+
+```{r export correlation plot}
+ggsave("figures/fig_3bc.pdf", width = 14, height = 10, units = "cm")
+```
+
+
+```{r pearson correlation on alpha diversity}
+# Correlation alpha diversity and depth
+chemistry %>%
+  group_by(replicate, parameter) %>% summarise(value = mean(value), .groups = "drop") %>%
+  filter(parameter == "depth") %>%
+  inner_join(adiv, by = "replicate") %>%
+  stats::cor.test(x = .$meandiv, y = .$value, method = "pearson", alternative = "two.sided")
+
+# Correlation alpha diversity and dissolved organic carbon
+chemistry %>%
+  group_by(replicate, parameter) %>% summarise(value = mean(value), .groups = "drop") %>%
+  filter(parameter == "DOC") %>%
+  inner_join(adiv, by = "replicate") %>%
+  stats::cor.test(x = .$meandiv, y = .$value, method = "pearson", alternative = "two.sided")
+
+# Correlation alpha diversity and chloride concentration
+chemistry %>%
+  group_by(replicate, parameter) %>% summarise(value = mean(value), .groups = "drop") %>%
+  filter(parameter == "Cl") %>%
+  inner_join(adiv, by = "replicate") %>%
+  stats::cor.test(x = .$meandiv, y = .$value, method = "pearson", alternative = "two.sided")
+```
+  
 
 Statistical testing on alpha diversity, start with testing for the assumptions. Use the mean over the replicates (meandiv) for statistical testing.
 
@@ -94,40 +333,44 @@ suppressPackageStartupMessages(library(car))
 shapiro.test(adiv$shannon)
 # Homogeneity of variance using Levene (null hypothesis variance is equal)
 leveneTest(shannon ~ env, data = adiv)
-# QQ-plot
-qqPlot(adiv$shannon)
 # Non-parametric testing (null hypothesis diversity is equal)
 kruskal.test(meandiv ~ env, data = adiv)
 # Run ANOVA (null hypothesis diversity is equal)
 aov(meandiv ~ env, data = adiv) %>% summary()
 # Post-hoc using Tukey (null hypothesis diversity is equal)
-aov(shannon ~ env, data = adiv) %>% TukeyHSD()
+aov(meandiv ~ env, data = adiv) %>% TukeyHSD(which = "env")
 ```
+
+```{r quantile-quantile plot}
+qqPlot(adiv$shannon, ylab = "Alpha diversity (Shannon index)")
+```
+
 
 ## Plot sequence length distribution among the different environments
 
 ```{r sequence length distribution, echo = FALSE}
-seqs <- read_tsv('sequences.tsv')
+seqs <- read_tsv('sequences.tsv', col_types = cols(.default = col_character()))
 
 seqtab %>%
   inner_join(smd, by = "sample") %>%
   inner_join(seqs, by = 'seqid') %>%
   ggplot(aes(x = env, y = nchar(sequence))) +
   geom_boxplot() +
-  labs(x = '', y = '') +
-  ggtitle("Sequence length distribution DADA2 output") +
+  labs(x = '', y = 'ASV length (nt)') +
   theme_bw() +
-  theme(axis.text.x.bottom = element_text(angle = 90))
+  theme(axis.text.x.bottom = element_text(angle = 90, hjust = 1.0))
 ```
 
 ## Ordination using NMDS, filtering out ASVs with a count less than 2
 
-```{r nmds, results='hide'}
+```{r run nmds, results='hide'}
 seqtab %>%
-  filter(count > 2) %>%
+  group_by(seqid) %>% filter(count > 2) %>% ungroup() %>%
   select(seqid, sample, count) %>% spread(seqid, count, fill = 0) %>%
-  column_to_rownames("sample") %>%
-  vegan::metaMDS(trymax = 50, k = 2, autotransform = T) -> nmds
+  column_to_rownames("sample") -> t
+
+set.seed(999)
+t %>%  vegan::metaMDS(trymax = 20, k = 2, autotransform = T) -> nmds
 ```
 
 Extract the scores
@@ -145,24 +388,49 @@ Plot the ordination
 nmds.scores %>%
   ggplot(aes(x = NMDS1, y = NMDS2)) +
   geom_point(aes(colour = env), size = 4.0, alpha = 0.7) +
+  scale_color_manual(values = 
+                       c("#a6cee3","#1f78b4","#b2df8a","#33a02c",
+                         "#fb9a99","#e31a1c","#fdbf6f","#b15928","#cab2d6")) +  
+  labs(x = "", y = "") +
+  geom_vline(xintercept = 0, linetype = 'dotted') +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  annotate('text', x = -2.3, y = -2.6, size = 3, label = paste('stress = ', round(nmds$stress, digits = 2))) +
+  theme_tidy() + guides(color = guide_legend(nrow = 3)) + 
+  theme(aspect.ratio = 0.8, legend.spacing.x = unit(-0.5, 'mm'))
+```
+
+```{r export nmds}
+ggsave("figures/fig_4.pdf", width = 12, height = 12, units = "cm")
+```
+
+```{r nmds deep biosphere groundwaters}
+seqtab %>%
+  filter(count > 4 & sample %in% smd[smd$surface == 'no', ]$sample) %>%
+  select(seqid, sample, count) %>% spread(seqid, count, fill = 0) %>%
+  column_to_rownames("sample") -> t
+
+set.seed(99)
+t %>%  vegan::metaMDS(trymax = 50, k = 2, autotransform = T) -> nmds.groundwater
+```
+
+```{r plot nmds deep biosphere groundwaters}
+vegan::scores(nmds.groundwater) %>%
+  as.data.frame() %>%
+  rownames_to_column("sample") %>%
+  inner_join(smd, by = "sample") %>%
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  geom_point(aes(colour = env), size = 4.0, alpha = 0.7) +
   scale_color_brewer(palette = 'Paired') +
   labs(x = "", y = "") +
   geom_vline(xintercept = 0, linetype = 'dotted') +
   geom_hline(yintercept = 0, linetype = 'dotted') +
-  annotate('text', x = -2.3, y = -2.6, size = 3, label = paste('Stress = ', round(nmds$stress, digits = 2))) +
-  theme_bw() +
-  theme(legend.title = element_blank(), 
-        axis.text = element_text(size = 8, colour = 'black'),
-        panel.grid = element_blank(),
-        legend.position = "bottom", 
-        legend.box.spacing = unit(-5, 'mm'),
-        legend.spacing.x = unit(-0.5, 'mm'),
-        legend.text = element_text(size = 7.5, colour = 'black'),
-        aspect.ratio = 0.8)
+  annotate('text', x = -4, y = -2.4, size = 3, label = paste('stress = ', round(nmds.groundwater$stress, digits = 2))) +
+  theme_tidy() + guides(color = guide_legend(nrow = 3)) + 
+  theme(aspect.ratio = 0.8, legend.spacing.x = unit(-0.5, 'mm'), legend.position = c(0.20,0.13))
 ```
 
-```{r export nmds}
-ggsave("figures/nmds.png", width = 12, height = 12, units = "cm")
+```{r export nmds deep biosphere groundwaters}
+ggsave("figures/fig_s4.pdf", width = 12, height = 12, units = "cm")
 ```
 
 Statistical testing on beta diversity
@@ -170,17 +438,20 @@ Statistical testing on beta diversity
 ```{r statistical testing beta diversity}
 seqtab %>%
   select(-relab) %>%
-  # Prepare a numeric dataframe for Vegan
+  inner_join(smd[, c("sample", "env", "replicate")], by = "sample") %>%
   spread(seqid, count, fill = 0) %>%
-  column_to_rownames('sample') %>%
-  pairwiseAdonis::pairwise.adonis(factors = smd %>% arrange(sample) %>% pull(env))
+  column_to_rownames('sample') -> df
+
+pairwiseAdonis::pairwise.adonis2(df[,3:ncol(df)] ~ env, data = df)
 ```
+
 
 Test the homogeneity of group variation
 
-```{Homogeneity of within-group variation}
+```{r test homogeneity of within-group variation}
 seqtab %>%
   select(-relab) %>% spread(seqid, count, fill = 0) %>%
+  column_to_rownames("sample") %>%
   vegan::vegdist() %>%
   vegan::betadisper(sqrt.dist = T, group = smd %>% arrange(sample) %>% pull(env)) %>%
   anova()
@@ -188,112 +459,62 @@ seqtab %>%
 
 ## Bar plots
 
-```{r select most abundant groups, message=FALSE, warning=FALSE}
-seqtab %>%
-  inner_join(smd, by = 'sample') %>%
-  inner_join(tax, by = "seqid") %>%
-  group_by(phylum, env) %>%
-  # Sum the abundance of each phylum within a sample
-  summarise(relab = sum(relab), .groups = 'drop_last') %>%
-  # Calculate the mean abundance of each phylum over the categories
-  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
-  filter(!is.na(phylum)) %>%
-  top_n(11, mean_relab) -> t
-```
+```{r plot bar plot phylum}
+x.label = smd %>% select(env, n) %>% distinct() %>% mutate(env = paste(env, n, sep = "\nn = ")) %>% pull(env)
 
-```{r add selection to taxonomy table, message=FALSE, warning=FALSE}
-tax %>%
-  left_join(t %>% transmute(phylum, topphylum = phylum), by = "phylum") %>%
-  replace_na(list("topphylum" = "Other")) -> taxref
-```
-
-```{r plot bar plot}
-seqtab %>%
-  inner_join(taxref, by = "seqid") %>% 
-  inner_join(smd, by = 'sample') %>%
-  mutate(topphylum = if_else(topphylum == 'uncultured bacterium', 'uncultured Parcubacterium', topphylum)) %>%
-  # Summarize in order to have the sum for each category and topphylum
-  group_by(topphylum, env) %>% 
-  summarise(relab = sum(relab), .groups = 'drop') %>%
+barplot() %>%
   # Call the plot
   ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
   labs(x = '', y = 'Relative abundance') +
   geom_col() +
   scale_fill_brewer(palette = 'Paired') +
-  coord_flip() + scale_y_continuous(trans = 'reverse', labels = c('1.0','0.75','0.50','0.25','0')) +
-  theme(legend.position = 'bottom', legend.spacing.x = unit(0.5, 'mm'),
-        text = element_text(colour = 'black'), legend.text = element_text(colour = 'black'),
-        legend.box.spacing = unit(1, 'mm'),
-        # For margin, the order is top - right - bottom - left
-        axis.text.y = element_text(margin = margin(0,-5,0,0, unit = 'mm'), colour = 'black'),
-        panel.background = element_blank(), aspect.ratio = 0.5,
-        legend.title = element_blank(),
-        axis.ticks.y = element_blank()) 
+  coord_flip() + 
+  scale_x_discrete(labels = rev(x.label)) +
+  scale_y_continuous(trans = 'reverse', labels = c('1.0','0.75','0.50','0.25','0')) +
+  theme_barplot()
 ```
 
 ```{r export bar plot}
-ggsave("figures/barplot_order.png", height = 24, width = 18, units = "cm")
+ggsave("figures/fig_2a.pdf", height = 16, width = 16, units = "cm")
 ```
 
-Add genome size to the heat map
-
-```{r barplot genome size}
-read_tsv("metabolisms.txt") -> mags
-
-mags %>%
-  # Express genome size in Mbp
-  mutate(size = size / 1e6, estimate = estimation / 1e6) %>%
-  select(asv, pos, size, estimate) %>%
-  gather(genome, fraction, 3:4) %>%
-  # Align according to position in the heat map
-  ggplot(aes(
-    x = fct_reorder(asv, pos, .desc = T), 
-    y = fraction,
-    fill = genome)) +
-  scale_fill_manual(values = c("size" = "#000000", "estimate" = "#bdbdbd")) +
-  ylab("Genome size") + xlab(element_blank()) + ylim(0, 6) +
+```{r barplot class taxonomic level}
+barplot(taxlevel = "class") %>%
+  # Call the plot
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = 'Relative abundance') +
   geom_col() +
-  coord_flip() +
-  theme(panel.background = element_blank(), 
-        axis.ticks.y = element_blank(), 
-        aspect.ratio = 8, 
-        legend.position = "none")
+  scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + 
+  scale_y_continuous(trans = 'reverse', labels = c('1.0','0.75','0.50','0.25','0')) +
+  theme_barplot() -> fig_s3a
 ```
 
-```{r export genome size}
-ggsave("figures/genomes.pdf", width = 8, height = 16, units = "cm")
+```{r barplot order taxonomic level}
+my.pal <- colorRampPalette(RColorBrewer::brewer.pal(12, "Paired"))
+paired.pal <- my.pal(20)
+
+barplot(taxlevel = "order", n = 19) %>%  
+  mutate(topphylum = gsub("Candidatus", "Ca.", topphylum)) %>%
+  # Call the plot
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = 'Relative abundance') +
+  geom_col() + 
+  scale_fill_manual(values = paired.pal) +
+  coord_flip() + scale_y_continuous(trans = 'reverse', labels = c('1.0','0.75','0.50','0.25','0')) +
+  theme_barplot() -> fig_s3b
 ```
 
-Plot heat map of the pathways
-
-```{r heat map pathways, message=FALSE, warning=FALSE}
-mags %>%
-  gather(pathway, presence, 10:17) %>%
-  mutate(presence = as.factor(presence)) %>%
-  ggplot(aes(x = pathway, y = fct_reorder(asv, pos, .desc = T))) +
-  geom_tile(aes(fill = presence), colour = '#bdbdbd') +
-  scale_fill_manual(values = c('0' = 'white', '1' = 'black')) +
-  theme_grey(base_size = 9) +
-  labs(x = "", y = "") +
-  scale_x_discrete(expand = c(0,0), position = "bottom") +
-  scale_y_discrete(expand = c(0,0)) + 
-  theme(axis.text.x = element_text(angle = 270, hjust = 0.1, vjust = 0.1),
-        text = element_text(size = 10), 
-        axis.ticks = element_blank(), 
-        panel.grid = element_blank(),
-        aspect.ratio = 4,
-        legend.position = "none")
-```
-
-```{r export pathways}
-ggsave("figures/pathways.pdf", width = 10, height = 16, units = "cm")
+```{r export barplot class plus order}
+cowplot::plot_grid(fig_s3a, fig_s3b, labels = c('a)','b)'), nrow = 2, label_size = 12, label_fontface = "plain")
+ggsave("figures/fig_s3.pdf", height = 20, width = 20, units = "cm")
 ```
 
 ## Core / unique community
 
 The core community is defined as the ASVs that are present in each of the three groundwater types. The unique commnunity (accesory community in manuscript) are the taxa that occur in a groundwater type but are not present in the other two. By filtering "n == 3", sequences are selected that are present in all three groundwaters; by filtering "n == 1", only the ASVs are selected that are not present in multiple groundwaters.
 
-```{r core asvs}
+```{r define core asvs}
 seqtab %>%
   # Select subsurface ASVs
   inner_join(smd, by = 'sample') %>% filter(surface == 'no') %>%
@@ -307,75 +528,141 @@ seqtab %>%
   filter(n != 2) %>% select(seqid, community) %>% distinct() -> core
 ```
 
-Now we know which sequences occupy the core community and their abundance in the groundwaters. Next to do is to select the 11 most abundant phyla (or classes / orders) and group the rest as "Others" so the plot is easy to read.
-
 ```{r top phyla in core, message=FALSE, warning=FALSE}
 seqtab %>%
-  # Filter asvs that are part of core
-  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
-  # Add metadata
-  inner_join(smd, by = 'sample') %>%
-  inner_join(tax, by = 'seqid') %>%
-  group_by(order, env) %>%
-  # Sum the abundance of each phylum within a sample
-  summarise(relab = sum(relab), .groups = 'drop_last') %>%
-  # Calculate the mean abundance of each phylum over the categories
-  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
-  filter(!is.na(order) & order != 'uncultured bacterium' & order != 'uncultured') %>%
-  top_n(11, mean_relab) -> t
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  barplot() %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "phylum")) %>% pull(seqid) -> t
 
-# Add column to taxonomy whether or not phylum is part of selection
-tax %>%
-  left_join(t %>% transmute(order, topphylum = order), by = "order") %>%
-  replace_na(list("topphylum" = "Other")) -> taxref
-```
-
-Plot the community with the 11 most abundant phyla and the rest grouped as "Other"
-
-```{r plot core community}
 seqtab %>%
- # Filter asvs that are part of core
-  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
-  # Add metadata
-  inner_join(taxref, by = 'seqid') %>%
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, phylum, "Other")) %>%
   inner_join(smd, by = 'sample') %>%
   filter(surface == 'no') %>%
-  # Summarize in order to have the sum for each category and topphylum
   group_by(topphylum, env) %>% 
   summarise(relab = sum(relab), .groups = 'drop') %>%
-  # Call the plot
   ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
-  labs(x = '', y = 'Relative abundance') +
-  geom_col() +
-  scale_fill_brewer(palette = 'Paired') +
-  coord_flip() + 
-  theme(legend.position = 'bottom', 
-        legend.spacing.x = unit(0.5, 'mm'),
-        text = element_text(colour = 'black'),
-        legend.box.spacing = unit(1, 'mm'),
-        # For margin, the order is top - right - bottom - left
-        axis.text.y = element_text(margin = margin(0,-5,0,0, unit = 'mm'), colour = 'black'),
-        panel.background = element_blank(), aspect.ratio = 1/5,
-        legend.title = element_blank(),
-        axis.ticks.y = element_blank()) -> c
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> core.phylum
 
-cowplot::plot_grid(a,b,c, nrow = 3, labels = c('A'), rel_heights = 0.8)
+seqtab %>%
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  barplot(taxlevel = "class") %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "class")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, class, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> core.class
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  barplot(taxlevel = "order") %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "order")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'core',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, order, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  mutate(topphylum = gsub("Candidatus", "Ca.", topphylum)) %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> core.order
+
+cowplot::plot_grid(core.phylum, core.class, core.order, nrow = 3, labels = c("a)", "", ""), label_fontface = "plain", label_size = 12)
+ggsave("figures/fig_s5b.pdf", width = 16, height = 18, units = "cm")
 ```
 
-Export the plot
-```{r export core}
-ggsave("figures/acc.png", width = 18, height = 24, units = "cm")
+```{r top phyla in acc, message=FALSE, warning=FALSE}
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  barplot() %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "phylum")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, phylum, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> acc.phylum
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  barplot(taxlevel = "class") %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "class")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, class, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> acc.class
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  barplot(taxlevel = "order") %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "order")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% core[core$community == 'acc',]$seqid) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, order, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  mutate(topphylum = gsub("Candidatus", "Ca.", topphylum)) %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> acc.order
+
+cowplot::plot_grid(acc.phylum, acc.class, acc.order, nrow = 3, labels = c("b)", "", ""), label_fontface = "plain", label_size = 12)
+ggsave("figures/fig_s5b.pdf", width = 16, height = 18, units = "cm")
 ```
 
 ## Overlapping taxa
 
 Which ASVs occur in multiple environments, also including surface environments. A small matrix is prepared containing all possible pairwise combinations between the different environments and this is piped to intersect().
 
+```{r relative abundance within category}
+seqtab %>%
+  # Calculate the relab within environment
+  inner_join(smd, by = 'sample') %>% 
+  group_by(env, seqid) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') -> reference
+```
+
+
 ```{r count overlapping taxa}
-smd %>% 
-  pull(env) %>% 
-  unique %>%
-  expand_grid(left = ., right = .) %>%
+expand_grid(x = unique(smd$env), y = unique(smd$env)) %>%
   mutate(overlap = 
            apply(., 1, function(x) intersect(
     reference[reference$env == x[1], "seqid"], 
@@ -393,6 +680,7 @@ smd %>%
   )
 ```
 
+
 ```{r identivy asvs that are present in surface}
 seqtab %>% 
   inner_join(smd, by = 'sample') %>%
@@ -402,58 +690,45 @@ seqtab %>%
   filter(n == 2) %>% pull(seqid) %>% unique() -> overlap
 ```
 
-```{r most abundant overlapping asvs}
-seqtab %>%
-  # Filter asvs that are overlapping between surface and subsurface
-  filter(seqid %in% overlap) %>%
-  # Add metadata
-  inner_join(smd, by = 'sample') %>%
-  inner_join(tax, by = 'seqid') %>%
-  group_by(phylum, env) %>%
-  # Sum the abundance of each phylum within a sample
-  summarise(relab = sum(relab), .groups = 'drop_last') %>%
-  # Calculate the mean abundance of each phylum over the categories
-  summarise(mean_relab = sum(relab), .groups = 'drop') %>%
-  filter(!is.na(phylum)) %>%
-  top_n(11, mean_relab) -> t
 
-# Add column to taxonomy whether or not phylum is part of selection
-tax %>%
-  left_join(t %>% transmute(phylum, topphylum = phylum), by = "phylum") %>%
-  replace_na(list("topphylum" = "Other")) -> taxref
-```
-
-```{r plot the overlapping asvs}
+```{r plot overlap and non-overlapping community}
 seqtab %>%
-  # Plot only overlapping community
   filter(seqid %in% overlap) %>%
-  inner_join(taxref, by = 'seqid') %>%
+  barplot() %>% filter(topphylum != "Other") %>%
+  left_join(tax, by = c("topphylum" = "phylum")) %>% pull(seqid) -> t
+
+seqtab %>%
+  filter(seqid %in% overlap) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, phylum, "Other")) %>%
   inner_join(smd, by = 'sample') %>%
   filter(surface == 'no') %>%
-  # Summarize in order to have the sum for each category and topphylum
   group_by(topphylum, env) %>% 
   summarise(relab = sum(relab), .groups = 'drop') %>%
-  # Call the plot
   ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
-  labs(x = '', y = 'Relative abundance') +
-  geom_col() +
-  scale_fill_brewer(palette = 'Paired') +
-  coord_flip() + 
-  theme(legend.position = 'bottom', legend.spacing.x = unit(0.5, 'mm'),
-        text = element_text(colour = 'black'),
-        legend.box.spacing = unit(1, 'mm'),
-        # For margin, the order is top - right - bottom - left
-        axis.text.y = element_text(margin = margin(0,-5,0,0, unit = 'mm'), colour = 'black'),
-        panel.background = element_blank(), aspect.ratio = 1/5,
-        legend.title = element_blank(),
-        axis.ticks.y = element_blank())
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> a
 
-cowplot::plot_grid(a,b, nrow = 2, labels = c('a','b'))
+seqtab %>%
+  filter(!seqid %in% overlap) %>%
+  inner_join(tax, by = "seqid") %>%
+  mutate(topphylum = if_else(seqid %in% t, phylum, "Other")) %>%
+  inner_join(smd, by = 'sample') %>%
+  filter(surface == 'no') %>%
+  group_by(topphylum, env) %>% 
+  summarise(relab = sum(relab), .groups = 'drop') %>%
+  ggplot(aes(x = fct_rev(env), y = relab, fill = fct_relevel(topphylum, c("Other")))) +
+  labs(x = '', y = '') +
+  geom_col() + scale_fill_brewer(palette = 'Paired') +
+  coord_flip() + theme_barplot() + theme(aspect.ratio = 1/4) -> b
+
+cowplot::plot_grid(a + theme(legend.position = 'none'), b + theme(legend.position = 'none'), cowplot::get_legend(b), nrow = 3, 
+                   labels = c('a)','b)'),
+                   label_fontface = "plain")
+ggsave("figures/fig_5bc.pdf", height = 12, width = 16, units = "cm")
 ```
 
-```{r export bar plot overlap}
-ggsave("figures/overlap_phylum.png", height = 16, width = 18, units = "cm")
-```
 
 ## Pheatmap
 
